@@ -1221,6 +1221,12 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .labo-card.ok .ok-msg{visibility:hidden}
 @media (prefers-reduced-motion:reduce){.labo-card.wait .ok-fill{animation:none;transform:translateY(30px)}}
 .spin.sm{display:inline-block;width:14px;height:14px;border-width:2px;vertical-align:-2px;margin:0 8px 0 0}
+
+/* la goutte comme jauge : le niveau est piloté par le script, la vague glisse en continu */
+.labo-card.jg-on .ok-fill{display:none}
+.jg-vague{fill:var(--blue);animation:jgVague 1.6s linear infinite}
+@keyframes jgVague{to{transform:translateX(15px)}}
+@media (prefers-reduced-motion:reduce){.jg-vague{animation:none}}
 </style>
 </head>
 <body>
@@ -8781,7 +8787,7 @@ start = function () {
     if (document.getElementById('app').hidden !== false) return;
     var c = document.getElementById('laboCard');
     /* les données sont là : la goutte finit de se remplir, la coche se dessine, puis la page s'efface */
-    if (c && c.classList.contains('wait')) { okVider(); c.classList.remove('wait'); c.classList.add('ok'); setTimeout(pubFermer, MOTION ? 650 : 0); }
+    if (c && c.classList.contains('wait')) { okVider(); jaugeFin(function () { c.classList.remove('wait'); c.classList.add('ok'); setTimeout(pubFermer, MOTION ? 650 : 0); }); }
     else pubFermer();
   };
   if (p && p.then) p.then(fin); else fin();
@@ -8801,21 +8807,62 @@ function okMsg(t) {
 }
 function okSuite(L) { L.forEach(function (x) { OKT.push(setTimeout(function () { okMsg(x[1]); }, x[0])); }); }
 var _doLoginPub = doLogin;
+/* une seule requête apporte le code vérifié et les données : la jauge monte d'un trait jusqu'à leur arrivée */
 doLogin = function (e) {
-  okVider(); okMsg('Vérification du code…');
-  okSuite([[4000, 'Le serveur se réveille, quelques secondes…']]);
+  okVider(); okMsg('Vérification du code…'); jaugeVers(0.92, 3);
+  okSuite([[1500, 'Chargement des données…'], [8000, 'Encore un instant : le serveur rassemble les classeurs.'], [20000, 'C\'est plus long que d\'habitude. La connexion internet est peut-être lente.']]);
   return _doLoginPub.apply(this, arguments);
 };
-/* code accepté : on garde la goutte en attente jusqu'à l'arrivée des données */
+/* code accepté : si les données ne sont pas venues avec (ancien serveur), la jauge continue pendant leur chargement */
 laboOk = function () {
-  okVider(); okMsg('Chargement des données…');
-  okSuite([[7000, 'Encore un instant : le serveur rassemble les classeurs.'], [20000, 'C\'est plus long que d\'habitude. La connexion internet est peut-être lente.']]);
+  if (!S._pre) { okVider(); okMsg('Chargement des données…'); okSuite([[7000, 'Encore un instant : le serveur rassemble les classeurs.']]); }
   return Promise.resolve();
 };
 var _showLoginOk = showLogin;
-showLogin = function () { okVider(); var c = document.getElementById('laboCard'); if (c) c.classList.remove('wait'); return _showLoginOk.apply(this, arguments); };
+showLogin = function () { okVider(); jaugeStop(0); var c = document.getElementById('laboCard'); if (c) c.classList.remove('wait'); return _showLoginOk.apply(this, arguments); };
 /* la connexion a pu s'afficher avant le chargement de ce module */
 (function () { var lg = document.getElementById('login'); if (lg && !lg.hidden) pubOuvrir(); })();
+
+/* ------------------------------------------------------------------ la goutte comme jauge
+   Le serveur ne dit pas où il en est : la jauge avance d'elle-même, vite au début puis de plus
+   en plus lentement (elle approche un plafond sans l'atteindre), et ne se remplit tout à fait
+   que lorsque les données sont arrivées. Vérification du code : jusqu'à 30 %. Données : jusqu'à
+   92 %. Arrivée : 100 %, puis la coche. Une vague parcourt la surface de l'eau. */
+var JG = { p: 0, cible: 0, tau: 1, t0: 0, p0: 0, raf: 0, fin: null };
+function jaugeEl() {
+  var c = document.getElementById('laboCard'), svg = c && c.querySelector('.labo-ok svg'); if (!svg) return null;
+  var g = svg.querySelector('.jg-eau');
+  if (!g) {
+    var r = svg.querySelector('rect.ok-fill'); if (r) r.style.display = 'none';
+    var ns = 'http://www.w3.org/2000/svg'; g = document.createElementNS(ns, 'g'); g.setAttribute('class', 'jg-eau'); g.setAttribute('clip-path', 'url(#okClip)');
+    var d = 'M-60 3'; for (var x = -60; x < 120; x += 15) d += ' q3.75 -3 7.5 0 t7.5 0';
+    var v = document.createElementNS(ns, 'path'); v.setAttribute('class', 'jg-vague'); v.setAttribute('d', d + ' L120 90 L-60 90 Z');
+    var tr = document.createElementNS(ns, 'g'); tr.setAttribute('class', 'jg-niv'); tr.appendChild(v); g.appendChild(tr);
+    var chk = svg.querySelector('.ok-check'); svg.insertBefore(g, chk || null);
+  }
+  return g.querySelector('.jg-niv');
+}
+function jaugePeindre() { var n = jaugeEl(); if (n) n.setAttribute('transform', 'translate(0 ' + (66 - 62 * JG.p).toFixed(2) + ')'); }
+function jaugeBoucle(t) {
+  var dt = (t - JG.t0) / 1000;
+  if (JG.fin) { JG.p = Math.min(1, JG.p0 + (1 - JG.p0) * Math.min(1, dt / 0.35)); jaugePeindre(); if (JG.p >= 1) { var f = JG.fin; JG.fin = null; JG.raf = 0; f(); return; } }
+  else { JG.p = JG.cible - (JG.cible - JG.p0) * Math.exp(-dt / JG.tau); jaugePeindre(); }
+  JG.raf = requestAnimationFrame(jaugeBoucle);
+}
+function jaugeVers(cible, tau) {
+  if (!MOTION) return;
+  var c = document.getElementById('laboCard'); if (c) c.classList.add('jg-on');
+  JG.p0 = JG.p; JG.cible = Math.max(cible, JG.p); JG.tau = tau; JG.t0 = performance.now(); JG.fin = null;
+  if (!JG.raf) JG.raf = requestAnimationFrame(jaugeBoucle);
+}
+function jaugeFin(apres) {
+  if (!MOTION || !JG.raf) { JG.p = 1; jaugePeindre(); jaugeStop(1); apres(); return; }
+  JG.p0 = JG.p; JG.t0 = performance.now(); JG.fin = function () { jaugeStop(1); apres(); };
+}
+function jaugeStop(p) {
+  if (JG.raf) cancelAnimationFrame(JG.raf); JG.raf = 0; JG.fin = null; JG.p = p; jaugePeindre();
+  if (!p) { var c = document.getElementById('laboCard'); if (c) c.classList.remove('jg-on'); }
+}
 
 /* ===================================================================
    v1.2 : import des matrices de suivi 4.1 et 4.3 (Word)
