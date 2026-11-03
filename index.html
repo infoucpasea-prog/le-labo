@@ -1220,6 +1220,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 .ok-msg{margin:0;max-width:260px;padding:0 16px;text-align:center;font:400 13.5px/1.45 Jost,sans-serif;color:var(--ink2);min-height:2.9em}
 .labo-card.ok .ok-msg{visibility:hidden}
 @media (prefers-reduced-motion:reduce){.labo-card.wait .ok-fill{animation:none;transform:translateY(30px)}}
+.spin.sm{display:inline-block;width:14px;height:14px;border-width:2px;vertical-align:-2px;margin:0 8px 0 0}
 </style>
 </head>
 <body>
@@ -1481,7 +1482,7 @@ function save(fn, args, msg) {
     .catch(function (e) { btns.forEach(function (b) { b.disabled = false; }); toast(e, true); });
 }
 function refresh() {
-  api('getData').then(function (d) { var t = S.tab; ingest(d); S.tab = t; render(); toast('Données actualisées'); }).catch(function (e) { toast(e, true); });
+  api('getData', { lite: true }).then(function (d) { var t = S.tab; ingest(d); S.tab = t; render(); toast('Données actualisées'); }).catch(function (e) { toast(e, true); });
 }
 
 /* =================================================================== démonstration (sans serveur) */
@@ -1554,9 +1555,9 @@ function doLogin(e) {
   var id = document.getElementById('lgId').value.trim(), code = document.getElementById('lgCode').value.trim(), b = document.getElementById('lgBtn'), card = document.getElementById('laboCard');
   if (!id || !code) return;
   b.disabled = true; document.getElementById('lgErr').textContent = ''; card.classList.remove('shake', 'ok'); if (typeof MOTION === 'undefined' || MOTION) card.classList.add('wait');
-  var p = S.mode === 'demo' ? new Promise(function (ok, ko) { try { ok(DEMO.login(id, code)); } catch (x) { ko(x.message); } }) : post({ action: 'login', args: [id, code] });
+  var p = S.mode === 'demo' ? new Promise(function (ok, ko) { try { ok(DEMO.login(id, code)); } catch (x) { ko(x.message); } }) : post({ action: 'login', args: [id, code, { data: true }] });
   p.then(function (r) {
-    S.token = r.token; S.user = r.user;
+    S.token = r.token; S.user = r.user; S._pre = r.data || null;
     try { sessionStorage.setItem('se_token', r.token); sessionStorage.setItem('se_user', JSON.stringify(r.user)); localStorage.setItem('labo_last', JSON.stringify({ nom: r.user.nom, email: id })); } catch (x) {}
     return (typeof laboOk === 'function' ? laboOk() : Promise.resolve()).then(start);
   }).catch(function (err) { card.classList.remove('wait', 'ok'); document.getElementById('lgErr').textContent = String(err); void card.offsetWidth; card.classList.add('shake'); })
@@ -1564,7 +1565,8 @@ function doLogin(e) {
 }
 function start() {
   document.getElementById('loading').style.display = 'grid';
-  return api('getData').then(function (d) {
+  var src = S._pre ? Promise.resolve(S._pre) : api('getData', { lite: true }); S._pre = null;
+  return src.then(function (d) {
     ingest(d);
     document.getElementById('login').hidden = true; document.body.classList.remove('on-login'); document.getElementById('app').hidden = false; document.getElementById('topR').hidden = false; document.getElementById('view').classList.add('enter-app');
     document.getElementById('loading').style.display = 'none';
@@ -9334,6 +9336,52 @@ function ergoNommer(root) {
   mo.observe(document.body, { childList: true, subtree: true });
   ergoNommer();
 })();
+
+/* ===================================================================
+   v1.2 : chargement en deux temps
+   La connexion ne reçoit que ce qu'il faut pour ouvrir l'outil (environ
+   un cinquième des données). Le cadre de résultats et la base financière
+   arrivent juste après, en arrière-plan ; les pages qui en ont besoin
+   affichent « Chargement… » d'ici là, puis se remplissent seules.
+   =================================================================== */
+S.srcPending = false;
+var _ingestDT = ingest;
+ingest = function (d) {
+  var garde = { cr: S.cr, fin: S.fin, meta: S.meta || {} };
+  var x = _ingestDT.apply(this, arguments);
+  if (d && d.lite) {
+    S.cr = garde.cr; S.fin = garde.fin;
+    ['situationFin', 'sourceFin', 'situationCR'].forEach(function (k) { if (garde.meta[k] !== undefined && S.meta[k] === undefined) S.meta[k] = garde.meta[k]; });
+    srcCharger();
+  }
+  return x;
+};
+function srcCharger() {
+  if (S.mode === 'demo' || S.srcPending) return;
+  S.srcPending = true;
+  api('getSources').then(function (x) {
+    S.srcPending = false;
+    S.cr = x.cr || null; S.fin = x.fin || null; S.meta = Object.assign(S.meta || {}, x.meta || {});
+    if (typeof _lctx !== 'undefined') _lctx = null;
+    if (srcPeutRedessiner()) render();
+  }).catch(function (e) {
+    S.srcPending = false; render();
+    toast('Le cadre de résultats et la finance n\'ont pas pu être chargés (' + e + '). Cliquer sur Actualiser pour réessayer.', true);
+  });
+}
+/* on ne redessine pas sous les doigts de quelqu'un qui est en train de saisir */
+function srcPeutRedessiner() {
+  var a = document.activeElement, v = document.getElementById('view');
+  return !(a && v && v.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+}
+var _renderDT = render;
+render = function () {
+  var x = _renderDT.apply(this, arguments);
+  if (S.srcPending) document.querySelectorAll('#view .card.empty').forEach(function (c) {
+    if (/pas encore branch/.test(c.textContent)) c.innerHTML = '<span class="spin sm" aria-hidden="true"></span> Chargement du cadre de résultats et de la finance, un instant…';
+  });
+  return x;
+};
 </script>
 </body>
 </html>
