@@ -1211,6 +1211,15 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
   .btn.sm{min-height:40px}
 }
 @media (max-width:560px){.lien-btn span{display:none}.lien-btn{padding:6px 8px}}
+
+/* attente après « Se connecter » : la goutte ondule, un message dit où on en est */
+.labo-card.wait .ok-fill{animation:okHalf 1.6s .1s cubic-bezier(.2,.7,.3,1) forwards,okWave 1.5s 1.7s ease-in-out infinite alternate}
+@keyframes okWave{from{transform:translateY(30px)}to{transform:translateY(19px)}}
+@keyframes okEnd{from{transform:translateY(25px)}to{transform:translateY(0)}}
+.labo-ok{grid-auto-flow:row;align-content:center;justify-items:center;gap:12px}
+.ok-msg{margin:0;max-width:260px;padding:0 16px;text-align:center;font:400 13.5px/1.45 Jost,sans-serif;color:var(--ink2);min-height:2.9em}
+.labo-card.ok .ok-msg{visibility:hidden}
+@media (prefers-reduced-motion:reduce){.labo-card.wait .ok-fill{animation:none;transform:translateY(30px)}}
 </style>
 </head>
 <body>
@@ -8766,10 +8775,43 @@ showLogin = function (msg) { _showLoginPub(msg); pubOuvrir(); };
 var _startPub = start;
 start = function () {
   var p = _startPub.apply(this, arguments);
-  var fin = function () { if (document.getElementById('app').hidden === false) pubFermer(); };
+  var fin = function () {
+    if (document.getElementById('app').hidden !== false) return;
+    var c = document.getElementById('laboCard');
+    /* les données sont là : la goutte finit de se remplir, la coche se dessine, puis la page s'efface */
+    if (c && c.classList.contains('wait')) { okVider(); c.classList.remove('wait'); c.classList.add('ok'); setTimeout(pubFermer, MOTION ? 650 : 0); }
+    else pubFermer();
+  };
   if (p && p.then) p.then(fin); else fin();
   return p;
 };
+
+/* attente du serveur après « Se connecter » : la goutte ondule et un message dit où on en est.
+   Avant, la goutte s'arrêtait à mi-hauteur, puis la coche s'affichait pendant que les données
+   chargeaient encore derrière la page de garde : on croyait l'outil bloqué. */
+var OKT = [];
+function okVider() { OKT.forEach(clearTimeout); OKT = []; okMsg(''); }
+function okMsg(t) {
+  var c = document.getElementById('laboCard'), o = c && c.querySelector('.labo-ok'); if (!o) return;
+  var m = o.querySelector('.ok-msg');
+  if (!m) { m = document.createElement('p'); m.className = 'ok-msg'; o.appendChild(m); }
+  m.textContent = t || ''; o.setAttribute('aria-hidden', t ? 'false' : 'true');
+}
+function okSuite(L) { L.forEach(function (x) { OKT.push(setTimeout(function () { okMsg(x[1]); }, x[0])); }); }
+var _doLoginPub = doLogin;
+doLogin = function (e) {
+  okVider(); okMsg('Vérification du code…');
+  okSuite([[4000, 'Le serveur se réveille, quelques secondes…']]);
+  return _doLoginPub.apply(this, arguments);
+};
+/* code accepté : on garde la goutte en attente jusqu'à l'arrivée des données */
+laboOk = function () {
+  okVider(); okMsg('Chargement des données…');
+  okSuite([[7000, 'Encore un instant : le serveur rassemble les classeurs.'], [20000, 'C\'est plus long que d\'habitude. La connexion internet est peut-être lente.']]);
+  return Promise.resolve();
+};
+var _showLoginOk = showLogin;
+showLogin = function () { okVider(); var c = document.getElementById('laboCard'); if (c) c.classList.remove('wait'); return _showLoginOk.apply(this, arguments); };
 /* la connexion a pu s'afficher avant le chargement de ce module */
 (function () { var lg = document.getElementById('login'); if (lg && !lg.hidden) pubOuvrir(); })();
 
